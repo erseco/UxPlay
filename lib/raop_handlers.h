@@ -1000,7 +1000,17 @@ raop_handler_setup(raop_conn_t *conn,
                 }
             case 96: {
                 // Audio
-                unsigned short cport = raop->control_lport, dport = raop->data_lport; 
+                /* EXPERIMENT: decline the audio stream at SETUP time while audio is
+                 * still advertised in mDNS — does the client fall back to local
+                 * audio output, or abort the session? */
+                if (getenv("UXPLAY_DECLINE_AUDIO") ||
+                    (getenv("UXPLAY_DECLINE_AUDIO_AFTER_DG") && getenv("UXPLAY_AUDIO_DOWNGRADED"))) {
+                    logger_log(raop->logger, LOGGER_INFO,
+                               "UXPLAY_DECLINE_AUDIO%s: declining audio (type 96) stream SETUP",
+                               getenv("UXPLAY_DECLINE_AUDIO") ? "" : "_AFTER_DG");
+                    break;
+                }
+                unsigned short cport = raop->control_lport, dport = raop->data_lport;
                 unsigned short remote_cport = 0;
                 unsigned char ct = 0;
                 unsigned int sr = AUDIO_SAMPLE_RATE; /* all AirPlay audio formats supported so far have sample rate 44.1kHz */

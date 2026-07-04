@@ -41,10 +41,18 @@ struct raop_event_s {
 
     int listen_sock;
     int client_sock;
+
+    /* UXPLAY_EVT_DOWNGRADE experiment: after ~15s of session, re-send
+     * updateInfo with the audio feature bits cleared ("hot downgrade") */
+    int downgrade;
 };
 
+#define UXPLAY_AUDIO_FEATURE_BITS \
+    ((((uint64_t) 1) << 9) | (((uint64_t) 1) << 11) | (((uint64_t) 1) << 18) | \
+     (((uint64_t) 1) << 19) | (((uint64_t) 1) << 20) | (((uint64_t) 1) << 21))
+
 static int
-raop_event_send_update_info(raop_event_t *ev)
+raop_event_send_update_info(raop_event_t *ev, bool downgraded)
 {
     plist_t root = plist_new_dict();
     plist_dict_set_item(root, "type", plist_new_string("updateInfo"));
@@ -73,6 +81,9 @@ raop_event_send_update_info(raop_event_t *ev)
             free(hw_addr);
         }
         features = dnssd_get_airplay_features(ev->dnssd);
+        if (downgraded) {
+            features &= ~UXPLAY_AUDIO_FEATURE_BITS;
+        }
         plist_dict_set_item(value, "features", plist_new_uint(features));
         if (ev->dnssd->pk) {
             int pk_len = 0;
@@ -82,10 +93,14 @@ raop_event_send_update_info(raop_event_t *ev)
                 free(pk);
             }
         }
-        int txt_len = 0;
-        const char *txt = dnssd_get_airplay_txt(ev->dnssd, &txt_len);
-        if (txt && txt_len > 0) {
-            plist_dict_set_item(value, "txtAirPlay", plist_new_data(txt, txt_len));
+        if (!downgraded) {
+            /* the raw TXT record still carries the original features string, so
+             * omit it from downgraded sends rather than contradict "features" */
+            int txt_len = 0;
+            const char *txt = dnssd_get_airplay_txt(ev->dnssd, &txt_len);
+            if (txt && txt_len > 0) {
+                plist_dict_set_item(value, "txtAirPlay", plist_new_data(txt, txt_len));
+            }
         }
     }
 
@@ -150,8 +165,14 @@ raop_event_send_update_info(raop_event_t *ev)
         ret = -1;
     } else {
         logger_log(ev->logger, LOGGER_INFO,
-                   "raop_event: sent updateInfo request on event channel (%u byte plist)",
+                   "raop_event: sent %supdateInfo request on event channel (%u byte plist)",
+                   downgraded ? "DOWNGRADED (audio bits cleared) " : "",
                    (unsigned int) body_len);
+        if (downgraded) {
+            /* signal the SETUP handler that the client has been told we no
+             * longer do audio (see UXPLAY_DECLINE_AUDIO_AFTER_DG) */
+            setenv("UXPLAY_AUDIO_DOWNGRADED", "1", 1);
+        }
     }
     plist_mem_free(body);
     return ret;
@@ -164,6 +185,7 @@ raop_event_thread(void *arg)
     assert(ev);
     unsigned char discard[4096];
     int last_update = 0;
+    bool downgraded_sent = false;
 
     logger_log(ev->logger, LOGGER_DEBUG, "raop_event: thread started, waiting for client");
 
@@ -202,8 +224,9 @@ raop_event_thread(void *arg)
                 if (ev->client_sock >= 0) {
                     logger_log(ev->logger, LOGGER_INFO,
                                "raop_event: client connected to event channel");
-                    raop_event_send_update_info(ev);
+                    raop_event_send_update_info(ev, false);
                     last_update = 0;
+                    downgraded_sent = false;
                 }
             }
             continue;
@@ -222,9 +245,15 @@ raop_event_thread(void *arg)
                        "raop_event: received %d bytes on event channel: %.100s", len, discard);
         }
 
-        /* periodic keep-alive updateInfo, every ~30s of select ticks */
-        if (++last_update >= 30) {
-            raop_event_send_update_info(ev);
+        /* UXPLAY_EVT_DOWNGRADE: ~15s into the session, tell the client we no
+         * longer support audio; otherwise periodic keep-alive every ~30s */
+        ++last_update;
+        if (ev->downgrade && !downgraded_sent && last_update >= 15) {
+            raop_event_send_update_info(ev, true);
+            downgraded_sent = true;
+            last_update = 0;
+        } else if (last_update >= 30) {
+            raop_event_send_update_info(ev, ev->downgrade && downgraded_sent);
             last_update = 0;
         }
     }
@@ -248,6 +277,11 @@ raop_event_init(logger_t *logger, dnssd_t *dnssd,
     ev->refreshRate = refreshRate;
     ev->maxFPS = maxFPS;
     ev->overscanned = overscanned;
+    ev->downgrade = (getenv("UXPLAY_EVT_DOWNGRADE") != NULL);
+    if (ev->downgrade) {
+        logger_log(logger, LOGGER_INFO,
+                   "raop_event: UXPLAY_EVT_DOWNGRADE active — will send audio-bits-cleared updateInfo ~15s in");
+    }
     ev->listen_sock = -1;
     ev->client_sock = -1;
     ev->running = 0;
@@ -280,6 +314,7 @@ raop_event_start(raop_event_t *ev, unsigned short *port, int use_ipv6)
         return -1;
     }
 
+    unsetenv("UXPLAY_AUDIO_DOWNGRADED"); /* fresh session: downgrade not yet sent */
     logger_log(ev->logger, LOGGER_INFO, "raop_event: event channel listening on port %u", *port);
 
     ev->running = 1;
