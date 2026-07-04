@@ -144,6 +144,7 @@ raop_handler_info(raop_conn_t *conn,
     plist_t features_node = plist_new_uint(features);
     plist_dict_set_item(res_node, "features", features_node);
 
+
     int name_len = 0;
     const char *name = dnssd_get_name(raop->dnssd, &name_len);
     plist_t name_node = plist_new_string(name);
@@ -175,9 +176,9 @@ raop_handler_info(raop_conn_t *conn,
         goto finished;
     }
 
-    plist_t initial_volume_node = plist_new_real(raop->callbacks.audio_set_client_volume(raop->callbacks.cls)); 
+    plist_t initial_volume_node = plist_new_real(raop->callbacks.audio_set_client_volume(raop->callbacks.cls));
     plist_dict_set_item(res_node, "initialVolume", initial_volume_node);
-      
+
     plist_t audio_latencies_node = plist_new_array();
     plist_t audio_latencies_0_node = plist_new_dict();
     plist_t audio_latencies_0_output_latency_micros_node = plist_new_bool(0);
@@ -930,8 +931,23 @@ raop_handler_setup(raop_conn_t *conn,
         conn->raop_rtp_mirror = raop_rtp_mirror_init(raop->logger, &raop->callbacks,
                                                      conn->raop_ntp, remote, conn->remotelen, aeskey);
 
-        /* the event port is not used in mirror mode or audio mode */
+        /* EXPERIMENT (see FDH2/UxPlay#489, #533): run a real event channel instead of
+         * advertising eventPort=0.  Both receivers that reproduced the video-only
+         * ~60s teardown (UxPlay and apsdk) advertised eventPort=0, so the "client
+         * waits for the reverse-HTTP event channel" hypothesis was never actually
+         * tested.  Observed with eventPort = <RTSP port>: the client opens a second
+         * connection there, sends nothing, and video never starts — the client
+         * expects the SERVER to speak first on this channel.  So raop_event runs a
+         * dedicated listener that sends an updateInfo request on accept. */
         unsigned short event_port = 0;
+        if (!conn->raop_event) {
+            conn->raop_event = raop_event_init(raop->logger, raop->dnssd,
+                                               raop->width, raop->height, raop->refreshRate,
+                                               raop->maxFPS, raop->overscanned);
+        }
+        if (conn->raop_event) {
+            raop_event_start(conn->raop_event, &event_port, (conn->remotelen == 16));
+        }
         plist_t res_event_port_node = plist_new_uint(event_port);
         plist_t res_timing_port_node = plist_new_uint(timing_lport);
         plist_dict_set_item(res_root_node, "timingPort", res_timing_port_node);

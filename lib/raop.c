@@ -31,6 +31,7 @@
 #include "compat.h"
 #include "raop_rtp_mirror.h"
 #include "raop_ntp.h"
+#include "raop_event.h"
 
 
 /* libplist-2.3.0  API change */
@@ -101,6 +102,7 @@ struct raop_s {
 struct raop_conn_s {
     raop_t *raop;
     raop_ntp_t *raop_ntp;
+    raop_event_t *raop_event;
     raop_rtp_t *raop_rtp;
     raop_rtp_mirror_t *raop_rtp_mirror;
     fairplay_t *fairplay;
@@ -563,6 +565,9 @@ conn_destroy(void *ptr) {
     }
     if (conn->raop_ntp) {
         raop_ntp_destroy(conn->raop_ntp);
+    }
+    if (conn->raop_event) {
+        raop_event_destroy(conn->raop_event);
     }
 
     if (raop->callbacks.video_flush) {
