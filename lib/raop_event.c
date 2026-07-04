@@ -45,6 +45,14 @@ struct raop_event_s {
     /* UXPLAY_EVT_DOWNGRADE experiment: after ~15s of session, re-send
      * updateInfo with the audio feature bits cleared ("hot downgrade") */
     int downgrade;
+
+    /* UXPLAY_EVT_WITHDRAW_RAOP experiment: at downgrade time, also withdraw
+     * the _raop._tcp mDNS service and re-announce _airplay._tcp with the audio
+     * feature bits (and bit 30) cleared, to see whether macOS then releases
+     * its (now dead) AirPlay audio output device. airplay_port is needed to
+     * re-announce _airplay._tcp with the updated TXT. */
+    int withdraw_raop;
+    unsigned short airplay_port;
 };
 
 #define UXPLAY_AUDIO_FEATURE_BITS \
@@ -250,6 +258,21 @@ raop_event_thread(void *arg)
         ++last_update;
         if (ev->downgrade && !downgraded_sent && last_update >= 15) {
             raop_event_send_update_info(ev, true);
+            if (ev->withdraw_raop) {
+                /* Also drop the audio advertisement at the discovery layer:
+                 * clear the audio feature bits (and bit 30 = "RAOP on this
+                 * port"), re-announce _airplay._tcp with the updated TXT, and
+                 * send a _raop._tcp goodbye. Tests whether macOS releases the
+                 * (now dead) AirPlay audio output device mid-session. */
+                logger_log(ev->logger, LOGGER_INFO,
+                           "raop_event: UXPLAY_EVT_WITHDRAW_RAOP — clearing audio bits, re-announcing _airplay, goodbye _raop");
+                dnssd_apply_no_audio_advertise(ev->dnssd);
+                dnssd_set_airplay_features(ev->dnssd, 30, 0);
+                if (ev->airplay_port) {
+                    dnssd_register_airplay(ev->dnssd, ev->airplay_port);
+                }
+                dnssd_unregister_raop(ev->dnssd);
+            }
             downgraded_sent = true;
             last_update = 0;
         } else if (last_update >= 30) {
@@ -264,7 +287,8 @@ raop_event_thread(void *arg)
 
 raop_event_t *
 raop_event_init(logger_t *logger, dnssd_t *dnssd,
-                int width, int height, int refreshRate, int maxFPS, int overscanned)
+                int width, int height, int refreshRate, int maxFPS, int overscanned,
+                unsigned short airplay_port)
 {
     raop_event_t *ev = calloc(1, sizeof(raop_event_t));
     if (!ev) {
@@ -277,10 +301,16 @@ raop_event_init(logger_t *logger, dnssd_t *dnssd,
     ev->refreshRate = refreshRate;
     ev->maxFPS = maxFPS;
     ev->overscanned = overscanned;
+    ev->airplay_port = airplay_port;
     ev->downgrade = (getenv("UXPLAY_EVT_DOWNGRADE") != NULL);
     if (ev->downgrade) {
         logger_log(logger, LOGGER_INFO,
                    "raop_event: UXPLAY_EVT_DOWNGRADE active — will send audio-bits-cleared updateInfo ~15s in");
+    }
+    ev->withdraw_raop = (getenv("UXPLAY_EVT_WITHDRAW_RAOP") != NULL);
+    if (ev->withdraw_raop) {
+        logger_log(logger, LOGGER_INFO,
+                   "raop_event: UXPLAY_EVT_WITHDRAW_RAOP active — will withdraw _raop._tcp and clear _airplay audio bits at downgrade");
     }
     ev->listen_sock = -1;
     ev->client_sock = -1;

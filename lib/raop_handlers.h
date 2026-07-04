@@ -943,7 +943,7 @@ raop_handler_setup(raop_conn_t *conn,
         if (!conn->raop_event) {
             conn->raop_event = raop_event_init(raop->logger, raop->dnssd,
                                                raop->width, raop->height, raop->refreshRate,
-                                               raop->maxFPS, raop->overscanned);
+                                               raop->maxFPS, raop->overscanned, raop->port);
         }
         if (conn->raop_event) {
             raop_event_start(conn->raop_event, &event_port, (conn->remotelen == 16));

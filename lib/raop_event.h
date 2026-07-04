@@ -24,7 +24,8 @@
 typedef struct raop_event_s raop_event_t;
 
 raop_event_t *raop_event_init(logger_t *logger, dnssd_t *dnssd,
-                              int width, int height, int refreshRate, int maxFPS, int overscanned);
+                              int width, int height, int refreshRate, int maxFPS, int overscanned,
+                              unsigned short airplay_port);
 /* binds a TCP listener (ephemeral port), spawns the thread, returns the port */
 int raop_event_start(raop_event_t *ev, unsigned short *port, int use_ipv6);
 void raop_event_destroy(raop_event_t *ev);
