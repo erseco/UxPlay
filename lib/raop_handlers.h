@@ -242,6 +242,33 @@ raop_handler_info(raop_conn_t *conn,
     plist_array_append_item(displays_node, displays_0_node);
     plist_dict_set_item(res_node, "displays", displays_node);
 
+    /* EXPERIMENT (see FDH2/UxPlay#533): optionally advertise a pyatv-style
+     * playbackCapabilities dict, to test whether the sender changes its HLS
+     * interstitial handling (e.g. resume position after a YouTube ad).
+     * Controlled by the UXPLAY_SUPPORTS_INTERSTITIALS environment variable so
+     * one binary covers every test condition:
+     *   unset          -> omit playbackCapabilities entirely (baseline)
+     *   "0" / "false"  -> advertise supportsInterstitials = false
+     *   anything else  -> advertise supportsInterstitials = true
+     * The other two keys mirror pyatv and stay constant, so supportsInterstitials
+     * is the only variable that changes between runs. */
+    const char *interstitials_env = getenv("UXPLAY_SUPPORTS_INTERSTITIALS");
+    if (interstitials_env) {
+        bool supports_interstitials = strcmp(interstitials_env, "0") != 0 &&
+                                      strcmp(interstitials_env, "false") != 0;
+        plist_t playback_capabilities_node = plist_new_dict();
+        plist_dict_set_item(playback_capabilities_node, "supportsInterstitials",
+                            plist_new_bool(supports_interstitials));
+        plist_dict_set_item(playback_capabilities_node, "supportsFPSSecureStop",
+                            plist_new_bool(0));
+        plist_dict_set_item(playback_capabilities_node, "supportsUIForAudioOnlyContent",
+                            plist_new_bool(0));
+        plist_dict_set_item(res_node, "playbackCapabilities", playback_capabilities_node);
+        logger_log(raop->logger, LOGGER_INFO,
+                   "raop_handler_info: advertising playbackCapabilities.supportsInterstitials=%s",
+                   supports_interstitials ? "true" : "false");
+    }
+
  finished:
     plist_to_bin(res_node, response_data, (uint32_t *) response_datalen);
     plist_free(res_node);
